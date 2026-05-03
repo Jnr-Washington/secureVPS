@@ -1,16 +1,16 @@
 /*
-  SecureOps Dashboard
-  Style: Lyra | Base: Zinc | Theme: Emerald-950 | Font: JetBrains Mono
-  Icons: Lucide | Menu: Solid + Bold Accent
-  
-  Dependencies (add to your project):
-    npm install lucide-react recharts
-  
-  Tailwind config – add to tailwind.config.js:
-    fontFamily: { mono: ['"JetBrains Mono"', 'monospace'] }
-  
-  Add to your index.html or global CSS:
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&display=swap');
+  SecureOps Dashboard – Refactored
+  ─────────────────────────────────────────────────────────────────
+  Changes from original:
+  1. Scanner (ScanPage / scan buttons) now calls FastAPI /scan/cms and /scan/ports
+  2. Deploy VPS button opens a choice modal: "Enter API Key" vs "Quick Deploy Wizard"
+  3. VPS deployment wizard calls deployment.py backend via Express bridge
+  4. DeployChoiceModal added – prompts user before any pipeline kicks off
+  5. API layer abstracted into api.ts-style hooks at top of file
+  ─────────────────────────────────────────────────────────────────
+  Dependencies: npm install lucide-react recharts
+  Tailwind config: fontFamily: { mono: ['"JetBrains Mono"', 'monospace'] }
+  Google Font: JetBrains Mono (see index.html / global CSS)
 */
 
 import { useState, useEffect, useRef } from "react";
@@ -21,7 +21,9 @@ import {
   Plus, Activity, Clock, Cpu, Globe, Lock,
   Menu, Bell, Settings, User, HardDrive,
   TrendingUp, TrendingDown, Minus, Search,
-  Terminal, Database, Network, Eye, BarChart3
+  Terminal, Database, Network, Eye, BarChart3,
+  Key, Wand2, ExternalLink, Loader2, AlertCircle,
+  Copy, Check
 } from "lucide-react";
 import {
   RadialBarChart, RadialBar, PieChart, Pie, Cell,
@@ -29,9 +31,75 @@ import {
   ResponsiveContainer, CartesianGrid
 } from "recharts";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Config ──────────────────────────────────────────────────────────────────
+
+// FastAPI backend (Python) – adjust if you run on a different port
+const FASTAPI_BASE = "http://localhost:8000";
+
+// Express backend (Node) – bridges to deployment.py
+const EXPRESS_BASE = "http://localhost:3001";
+
+// ─── API Layer ────────────────────────────────────────────────────────────────
+
+interface ScanResult {
+  target: string;
+  open_ports?: number[];
+  cms?: string | null;
+  error?: string;
+}
+
+interface DeployPayload {
+  instanceName: string;
+  provider: string;
+  os: string;
+  size: string;
+  region: string;
+  apiKey: string;
+  sshKeyPath?: string;
+  autoScan: boolean;
+}
+
+interface DeployResult {
+  ip?: string;
+  error?: string;
+  status: "ok" | "error";
+}
+
+async function apiScanPorts(target: string): Promise<ScanResult> {
+  const res = await fetch(`${FASTAPI_BASE}/scan/ports`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function apiScanCms(target: string): Promise<ScanResult> {
+  const res = await fetch(`${FASTAPI_BASE}/scan/cms`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// Express bridge: POST /deploy → calls deployment.py VPSDeploymentPipeline
+async function apiDeploy(payload: DeployPayload): Promise<DeployResult> {
+  const res = await fetch(`${EXPRESS_BASE}/deploy`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type NavPage = "dashboard" | "vps" | "deploy" | "scan" | "reports";
+type DeployFlow = "choice" | "api-key" | "wizard" | "running" | null;
 
 interface VpsInstance {
   id: string;
@@ -64,7 +132,7 @@ interface Report {
   date: string;
 }
 
-// ─── Mock Data ───────────────────────────────────────────────────────────────
+// ─── Mock Data ────────────────────────────────────────────────────────────────
 
 const VPS_DATA: VpsInstance[] = [
   { id: "1", name: "web-prod-01", ip: "192.168.1.10", os: "Ubuntu 22.04", cpu: "2vCPU / 4GB", region: "EU-West-1", provider: "AWS EC2", status: "running", vulns: 0 },
@@ -136,41 +204,26 @@ const StatusBadge = ({ status }: { status: string }) => {
   );
 };
 
-const ProviderBadge = ({ p }: { p: string }) => {
-  const map: Record<string, string> = {
-    "AWS EC2": "bg-zinc-800 text-zinc-300 border border-zinc-700",
-    "DigitalOcean": "bg-zinc-800 text-zinc-300 border border-zinc-700",
-    "Hetzner": "bg-zinc-800 text-zinc-300 border border-zinc-700",
-  };
-  return (
-    <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${map[p] || ""}`}>{p}</span>
-  );
-};
+const ProviderBadge = ({ p }: { p: string }) => (
+  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700">{p}</span>
+);
 
 const MetricCard = ({
   label, value, delta, deltaDir, sub
 }: { label: string; value: string; delta?: string; deltaDir?: "up" | "down" | "neutral"; sub?: string }) => {
-  const icon = deltaDir === "up"
-    ? <TrendingUp size={11} />
-    : deltaDir === "down"
-    ? <TrendingDown size={11} />
-    : <Minus size={11} />;
+  const icon = deltaDir === "up" ? <TrendingUp size={11} /> : deltaDir === "down" ? <TrendingDown size={11} /> : <Minus size={11} />;
   const col = deltaDir === "up" ? "text-emerald-400" : deltaDir === "down" ? "text-red-400" : "text-zinc-500";
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-col gap-1">
       <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">{label}</span>
       <span className="text-3xl font-mono font-800 text-zinc-100 leading-none">{value}</span>
-      {delta && (
-        <span className={`flex items-center gap-1 text-[11px] font-mono ${col}`}>
-          {icon}{delta}
-        </span>
-      )}
+      {delta && <span className={`flex items-center gap-1 text-[11px] font-mono ${col}`}>{icon}{delta}</span>}
       {sub && <span className="text-[11px] font-mono text-zinc-600">{sub}</span>}
     </div>
   );
 };
 
-// ─── Modal ────────────────────────────────────────────────────────────────────
+// ─── Progress Modal (deploy / scan progress) ──────────────────────────────────
 
 interface ProgressModalProps {
   open: boolean;
@@ -203,30 +256,22 @@ const ProgressModal = ({ open, onClose, title, accentColor, steps, logLines }: P
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
-      <div
-        className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-md mx-4 overflow-hidden shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
+      <div className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-md mx-4 overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
           <span className="font-mono font-700 text-zinc-100 text-sm">{title}</span>
           <button onClick={onClose} className="text-zinc-500 hover:text-zinc-200 transition-colors"><X size={16} /></button>
         </div>
         <div className="px-5 py-6">
           <div className="flex flex-col items-center gap-3 mb-5">
-            {done ? (
-              <CheckCircle2 size={44} className="text-emerald-500" />
-            ) : (
-              <div className={`w-12 h-12 rounded-full border-[3px] border-zinc-800 border-t-${accentColor} animate-spin`}
-                style={{ borderTopColor: accentColor === "emerald" ? "#10b981" : "#3b82f6" }} />
-            )}
+            {done
+              ? <CheckCircle2 size={44} className="text-emerald-500" />
+              : <div className="w-12 h-12 rounded-full border-[3px] border-zinc-800 animate-spin" style={{ borderTopColor: accentColor === "emerald" ? "#10b981" : "#3b82f6" }} />
+            }
             <span className="text-3xl font-mono font-800 text-emerald-400">{Math.round(pct)}%</span>
             <span className="text-xs font-mono text-zinc-400">{done ? "Complete!" : steps[step]}</span>
           </div>
           <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-emerald-500 transition-all duration-300"
-              style={{ width: `${pct}%` }}
-            />
+            <div className="h-full rounded-full bg-emerald-500 transition-all duration-300" style={{ width: `${pct}%` }} />
           </div>
           {logLines && (
             <div className="mt-4 bg-zinc-900 rounded-lg p-3 max-h-28 overflow-y-auto">
@@ -237,11 +282,416 @@ const ProgressModal = ({ open, onClose, title, accentColor, steps, logLines }: P
           )}
         </div>
         <div className="px-5 py-3 border-t border-zinc-800 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg text-xs font-mono bg-zinc-800 text-zinc-300 hover:bg-red-950 hover:text-red-400 border border-zinc-700 hover:border-red-800 transition-all"
-          >
+          <button onClick={onClose} className="px-4 py-1.5 rounded-lg text-xs font-mono bg-zinc-800 text-zinc-300 hover:bg-red-950 hover:text-red-400 border border-zinc-700 hover:border-red-800 transition-all">
             {done ? "Close" : "Abort"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── NEW: Deploy Choice Modal ─────────────────────────────────────────────────
+// Shown when user clicks "Deploy VPS" from any context.
+// Lets user choose: enter their own API key OR use site's Quick Deploy Wizard.
+
+interface DeployChoiceModalProps {
+  open: boolean;
+  onClose: () => void;
+  onChooseApiKey: () => void;
+  onChooseWizard: () => void;
+}
+
+const DeployChoiceModal = ({ open, onClose, onChooseApiKey, onChooseWizard }: DeployChoiceModalProps) => {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-sm mx-4 overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-md bg-emerald-600 flex items-center justify-center">
+              <Zap size={12} className="text-zinc-950" />
+            </div>
+            <span className="font-mono font-700 text-zinc-100 text-sm">Deploy VPS</span>
+          </div>
+          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-200 transition-colors"><X size={16} /></button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          <p className="text-[11px] font-mono text-zinc-500 leading-relaxed">
+            Choose how you want to deploy. You can bring your own provider API key, or use our guided Quick Deploy wizard.
+          </p>
+
+          {/* Option A: Own API Key */}
+          <button
+            onClick={onChooseApiKey}
+            className="w-full flex items-start gap-3 p-4 rounded-xl border border-zinc-700 hover:border-emerald-700 bg-zinc-900 hover:bg-emerald-950/40 transition-all text-left group"
+          >
+            <div className="w-9 h-9 rounded-lg bg-zinc-800 group-hover:bg-emerald-900 border border-zinc-700 group-hover:border-emerald-700 flex items-center justify-center flex-shrink-0 transition-all">
+              <Key size={16} className="text-zinc-400 group-hover:text-emerald-400 transition-colors" />
+            </div>
+            <div>
+              <div className="text-xs font-mono font-700 text-zinc-200 group-hover:text-emerald-300 transition-colors">Use My Provider API Key</div>
+              <div className="text-[10px] font-mono text-zinc-600 mt-0.5 leading-relaxed">Enter a DigitalOcean, AWS, or Hetzner API token and deploy directly from your account.</div>
+            </div>
+            <ChevronRight size={14} className="text-zinc-600 group-hover:text-emerald-500 mt-2 flex-shrink-0 transition-colors" />
+          </button>
+
+          {/* Option B: Quick Deploy Wizard */}
+          <button
+            onClick={onChooseWizard}
+            className="w-full flex items-start gap-3 p-4 rounded-xl border border-zinc-700 hover:border-blue-700 bg-zinc-900 hover:bg-blue-950/40 transition-all text-left group"
+          >
+            <div className="w-9 h-9 rounded-lg bg-zinc-800 group-hover:bg-blue-900 border border-zinc-700 group-hover:border-blue-700 flex items-center justify-center flex-shrink-0 transition-all">
+              <Wand2 size={16} className="text-zinc-400 group-hover:text-blue-400 transition-colors" />
+            </div>
+            <div>
+              <div className="text-xs font-mono font-700 text-zinc-200 group-hover:text-blue-300 transition-colors">Quick Deploy Wizard</div>
+              <div className="text-[10px] font-mono text-zinc-600 mt-0.5 leading-relaxed">Let SecureOps handle provisioning. Includes automated hardening and OpenVAS scan on first boot.</div>
+            </div>
+            <ChevronRight size={14} className="text-zinc-600 group-hover:text-blue-500 mt-2 flex-shrink-0 transition-colors" />
+          </button>
+        </div>
+
+        <div className="px-5 pb-4">
+          <button onClick={onClose} className="w-full py-2 rounded-lg text-xs font-mono text-zinc-600 hover:text-zinc-400 transition-colors">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── NEW: API Key Deploy Modal ────────────────────────────────────────────────
+// Collects provider + API key from user, then calls deployment.py via Express.
+
+interface ApiKeyDeployModalProps {
+  open: boolean;
+  onClose: () => void;
+  onBack: () => void;
+  onStartDeploy: (instanceName: string) => void;
+}
+
+const API_KEY_DEPLOY_STEPS = [
+  "Validating API credentials...",
+  "Provisioning cloud instance...",
+  "Waiting for IP assignment...",
+  "Running Ansible hardening...",
+  "Triggering OpenVAS baseline scan...",
+  "Finalizing deployment...",
+];
+
+const ApiKeyDeployModal = ({ open, onClose, onBack, onStartDeploy }: ApiKeyDeployModalProps) => {
+  const [provider, setProvider] = useState("DigitalOcean");
+  const [apiKey, setApiKey] = useState("");
+  const [instanceName, setInstanceName] = useState("");
+  const [sshKey, setSshKey] = useState("~/.ssh/id_rsa.pub");
+  const [region, setRegion] = useState("nyc3");
+  const [size, setSize] = useState("s-1vcpu-2gb");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [keyVisible, setKeyVisible] = useState(false);
+
+  const handleDeploy = async () => {
+    if (!apiKey.trim() || !instanceName.trim()) {
+      setError("Instance name and API key are required.");
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    try {
+      const result = await apiDeploy({
+        instanceName,
+        provider,
+        os: "ubuntu-22-04-x64",
+        size,
+        region,
+        apiKey,
+        sshKeyPath: sshKey,
+        autoScan: true,
+      });
+      if (result.status === "error") throw new Error(result.error || "Deploy failed");
+      onStartDeploy(instanceName);
+    } catch (e: any) {
+      setError(e.message || "Deployment failed. Check backend logs.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-md mx-4 overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <button onClick={onBack} className="text-zinc-500 hover:text-zinc-300 transition-colors mr-1">
+              <ChevronRight size={14} className="rotate-180" />
+            </button>
+            <Key size={14} className="text-emerald-500" />
+            <span className="font-mono font-700 text-zinc-100 text-sm">API Key Deployment</span>
+          </div>
+          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-200 transition-colors"><X size={16} /></button>
+        </div>
+
+        <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+          {error && (
+            <div className="flex items-center gap-2 bg-red-950 border border-red-800 rounded-lg px-3 py-2">
+              <AlertCircle size={13} className="text-red-400 flex-shrink-0" />
+              <span className="text-[11px] font-mono text-red-400">{error}</span>
+            </div>
+          )}
+
+          {/* Provider select */}
+          <div>
+            <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block mb-1.5">VPS PROVIDER</label>
+            <select
+              value={provider}
+              onChange={e => setProvider(e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-700 transition-all"
+            >
+              <option>DigitalOcean</option>
+              <option>AWS EC2</option>
+              <option>Hetzner</option>
+            </select>
+          </div>
+
+          {/* API Key input */}
+          <div>
+            <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block mb-1.5">
+              {provider === "AWS EC2" ? "ACCESS KEY ID / SECRET" : "API TOKEN"}
+            </label>
+            <div className="relative">
+              <input
+                type={keyVisible ? "text" : "password"}
+                value={apiKey}
+                onChange={e => setApiKey(e.target.value)}
+                placeholder={provider === "DigitalOcean" ? "dop_v1_..." : provider === "Hetzner" ? "htz_..." : "AKIA..."}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 pr-9 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-700 focus:ring-1 focus:ring-emerald-900 transition-all"
+              />
+              <button
+                onClick={() => setKeyVisible(v => !v)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 transition-colors"
+              >
+                <Eye size={13} />
+              </button>
+            </div>
+            <p className="text-[10px] font-mono text-zinc-600 mt-1">
+              Keys are sent only to your provider — never stored by SecureOps.
+            </p>
+          </div>
+
+          {/* Instance Name */}
+          <div>
+            <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block mb-1.5">INSTANCE NAME</label>
+            <input
+              type="text"
+              value={instanceName}
+              onChange={e => setInstanceName(e.target.value)}
+              placeholder="e.g. web-prod-02"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-700 focus:ring-1 focus:ring-emerald-900 transition-all"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {/* Region */}
+            <div>
+              <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block mb-1.5">REGION</label>
+              <select
+                value={region}
+                onChange={e => setRegion(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-700 transition-all"
+              >
+                <option value="nyc3">US-East (NYC3)</option>
+                <option value="fra1">EU-West (FRA1)</option>
+                <option value="sgp1">AP-SE (SGP1)</option>
+                <option value="lon1">EU (LON1)</option>
+              </select>
+            </div>
+            {/* Size */}
+            <div>
+              <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block mb-1.5">SIZE</label>
+              <select
+                value={size}
+                onChange={e => setSize(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-700 transition-all"
+              >
+                <option value="s-1vcpu-1gb">1vCPU / 1GB</option>
+                <option value="s-1vcpu-2gb">1vCPU / 2GB</option>
+                <option value="s-2vcpu-4gb">2vCPU / 4GB</option>
+                <option value="s-4vcpu-8gb">4vCPU / 8GB</option>
+              </select>
+            </div>
+          </div>
+
+          {/* SSH Key path */}
+          <div>
+            <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block mb-1.5">SSH PUBLIC KEY PATH (server-side)</label>
+            <input
+              type="text"
+              value={sshKey}
+              onChange={e => setSshKey(e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-700 transition-all"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input type="checkbox" id="autoscan2" defaultChecked className="accent-emerald-500 w-3.5 h-3.5" />
+            <label htmlFor="autoscan2" className="text-xs font-mono text-zinc-400">Run OpenVAS scan after deployment</label>
+          </div>
+        </div>
+
+        <div className="px-5 py-4 border-t border-zinc-800">
+          <button
+            onClick={handleDeploy}
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 text-xs font-mono font-700 transition-all active:scale-[0.98]"
+          >
+            {loading ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
+            {loading ? "Connecting to provider..." : "Deploy via API Key"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── NEW: Live Scan Modal ─────────────────────────────────────────────────────
+// Replaces the fake ProgressModal for scans — actually calls FastAPI.
+
+interface LiveScanModalProps {
+  open: boolean;
+  onClose: () => void;
+  target: string;
+}
+
+const LiveScanModal = ({ open, onClose, target }: LiveScanModalProps) => {
+  type Phase = "idle" | "ports" | "cms" | "done" | "error";
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [portsResult, setPortsResult] = useState<ScanResult | null>(null);
+  const [cmsResult, setCmsResult] = useState<ScanResult | null>(null);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [log, setLog] = useState<string[]>([]);
+
+  const addLog = (line: string) => setLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${line}`]);
+
+  useEffect(() => {
+    if (!open) {
+      setPhase("idle"); setPortsResult(null); setCmsResult(null);
+      setLog([]); setErrorMsg("");
+      return;
+    }
+    runScan();
+  }, [open, target]);
+
+  const runScan = async () => {
+    setPhase("ports");
+    addLog(`Starting port scan on ${target}...`);
+    try {
+      const ports = await apiScanPorts(target);
+      setPortsResult(ports);
+      addLog(`Port scan complete. Found ${ports.open_ports?.length ?? 0} open port(s).`);
+      (ports.open_ports ?? []).forEach(p => addLog(`  → Port ${p} open`));
+
+      setPhase("cms");
+      addLog(`Detecting CMS on ${target}...`);
+      const cms = await apiScanCms(target);
+      setCmsResult(cms);
+      addLog(`CMS detection complete: ${cms.cms ?? "None detected"}`);
+      setPhase("done");
+    } catch (e: any) {
+      setErrorMsg(e.message || "Scan failed");
+      addLog(`ERROR: ${e.message}`);
+      setPhase("error");
+    }
+  };
+
+  if (!open) return null;
+
+  const phaseLabel: Record<Phase, string> = {
+    idle: "Initialising...",
+    ports: "Scanning ports via FastAPI...",
+    cms: "Detecting CMS via FastAPI...",
+    done: "Scan complete",
+    error: "Scan failed",
+  };
+
+  const pct = phase === "idle" ? 0 : phase === "ports" ? 30 : phase === "cms" ? 70 : 100;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-lg mx-4 overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+          <span className="font-mono font-700 text-zinc-100 text-sm">Live Scan — {target}</span>
+          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-200 transition-colors"><X size={16} /></button>
+        </div>
+
+        <div className="px-5 py-6 space-y-5">
+          {/* Status */}
+          <div className="flex flex-col items-center gap-3">
+            {phase === "done"
+              ? <CheckCircle2 size={40} className="text-emerald-500" />
+              : phase === "error"
+              ? <AlertOctagon size={40} className="text-red-500" />
+              : <Loader2 size={40} className="text-blue-400 animate-spin" />
+            }
+            <span className="text-xs font-mono text-zinc-400">{phaseLabel[phase]}</span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+            <div className="h-full rounded-full bg-blue-500 transition-all duration-700" style={{ width: `${pct}%` }} />
+          </div>
+
+          {/* Log */}
+          <div className="bg-zinc-900 rounded-lg p-3 max-h-32 overflow-y-auto">
+            {log.map((l, i) => (
+              <div key={i} className={`text-[10px] font-mono leading-5 ${l.includes("ERROR") ? "text-red-400" : "text-zinc-400"}`}>{l}</div>
+            ))}
+          </div>
+
+          {/* Results */}
+          {phase === "done" && (
+            <div className="space-y-3">
+              {portsResult && (
+                <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+                  <div className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider mb-2">Open Ports</div>
+                  {portsResult.open_ports && portsResult.open_ports.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {portsResult.open_ports.map(p => (
+                        <span key={p} className="text-[10px] font-mono px-2 py-0.5 bg-blue-950 text-blue-400 border border-blue-800 rounded">{p}</span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-[11px] font-mono text-zinc-600">No open ports detected</span>
+                  )}
+                </div>
+              )}
+              {cmsResult && (
+                <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+                  <div className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider mb-1">CMS Detected</div>
+                  <span className="text-xs font-mono text-zinc-200">{cmsResult.cms ?? "None / unknown"}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {phase === "error" && (
+            <div className="bg-red-950 border border-red-800 rounded-lg px-3 py-2">
+              <span className="text-[11px] font-mono text-red-400">{errorMsg}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-zinc-800 flex justify-between items-center">
+          {phase === "error" && (
+            <button onClick={runScan} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border border-zinc-700 transition-all">
+              <RefreshCw size={11} /> Retry
+            </button>
+          )}
+          <button onClick={onClose} className="ml-auto px-4 py-1.5 rounded-lg text-xs font-mono bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border border-zinc-700 transition-all">
+            {phase === "done" || phase === "error" ? "Close" : "Cancel"}
           </button>
         </div>
       </div>
@@ -257,16 +707,13 @@ const DashboardPage = ({ onOpenDeploy, onOpenScan }: { onOpenDeploy: () => void;
       <h1 className="text-xl font-mono font-800 text-zinc-100 tracking-tight">Overview</h1>
       <p className="text-xs font-mono text-zinc-500 mt-0.5">Security posture across your infrastructure</p>
     </div>
-
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
       <MetricCard label="Active VPS" value="3" delta="↑ 1 this week" deltaDir="up" />
       <MetricCard label="Open Vulns" value="7" delta="↑ 2 since last scan" deltaDir="down" />
       <MetricCard label="Last Scan" value="2h ago" sub="OpenVAS engine" deltaDir="neutral" />
       <MetricCard label="Reports" value="12" sub="3 this month" deltaDir="neutral" />
     </div>
-
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* Vuln Breakdown */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
         <div className="flex items-center justify-between mb-4">
           <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider">Vulnerability Breakdown</span>
@@ -296,8 +743,6 @@ const DashboardPage = ({ onOpenDeploy, onOpenScan }: { onOpenDeploy: () => void;
           </div>
         </div>
       </div>
-
-      {/* Area Chart */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
         <div className="flex items-center justify-between mb-4">
           <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider">7-Day Trend</span>
@@ -318,18 +763,13 @@ const DashboardPage = ({ onOpenDeploy, onOpenScan }: { onOpenDeploy: () => void;
             <CartesianGrid strokeDasharray="2 4" stroke="#27272a" />
             <XAxis dataKey="day" tick={{ fontSize: 10, fontFamily: "JetBrains Mono", fill: "#52525b" }} />
             <YAxis tick={{ fontSize: 10, fontFamily: "JetBrains Mono", fill: "#52525b" }} />
-            <Tooltip
-              contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8, fontFamily: "JetBrains Mono", fontSize: 11 }}
-              labelStyle={{ color: "#a1a1aa" }}
-            />
+            <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8, fontFamily: "JetBrains Mono", fontSize: 11 }} labelStyle={{ color: "#a1a1aa" }} />
             <Area type="monotone" dataKey="critical" stroke="#ef4444" strokeWidth={1.5} fill="url(#cg)" />
             <Area type="monotone" dataKey="high" stroke="#f97316" strokeWidth={1.5} fill="url(#hg)" />
           </AreaChart>
         </ResponsiveContainer>
       </div>
     </div>
-
-    {/* Recent Activity */}
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
       <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider block mb-4">Recent Activity</span>
       <div className="space-y-0">
@@ -351,8 +791,6 @@ const DashboardPage = ({ onOpenDeploy, onOpenScan }: { onOpenDeploy: () => void;
         ))}
       </div>
     </div>
-
-    {/* Fleet Preview */}
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
         <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider">VPS Fleet Status</span>
@@ -375,9 +813,7 @@ const DashboardPage = ({ onOpenDeploy, onOpenScan }: { onOpenDeploy: () => void;
                 <td className="px-4 py-3"><ProviderBadge p={v.provider} /></td>
                 <td className="px-4 py-3"><StatusBadge status={v.status} /></td>
                 <td className="px-4 py-3">
-                  <span className={`font-700 ${v.vulns === 0 ? "text-zinc-500" : v.vulns >= 4 ? "text-red-400" : "text-yellow-400"}`}>
-                    {v.vulns}
-                  </span>
+                  <span className={`font-700 ${v.vulns === 0 ? "text-zinc-500" : v.vulns >= 4 ? "text-red-400" : "text-yellow-400"}`}>{v.vulns}</span>
                 </td>
               </tr>
             ))}
@@ -388,7 +824,8 @@ const DashboardPage = ({ onOpenDeploy, onOpenScan }: { onOpenDeploy: () => void;
   </div>
 );
 
-const VpsPage = ({ onScan }: { onScan: (h: string) => void }) => (
+// VpsPage — "Deploy VPS" button now calls onOpenDeploy (choice modal)
+const VpsPage = ({ onScan, onOpenDeploy }: { onScan: (h: string) => void; onOpenDeploy: () => void }) => (
   <div className="space-y-5">
     <div className="flex items-start justify-between">
       <div>
@@ -396,7 +833,7 @@ const VpsPage = ({ onScan }: { onScan: (h: string) => void }) => (
         <p className="text-xs font-mono text-zinc-500 mt-0.5">Manage and monitor your virtual machines</p>
       </div>
       <button
-        onClick={() => {}}
+        onClick={onOpenDeploy}
         className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-zinc-950 text-xs font-mono font-700 transition-all active:scale-95"
       >
         <Plus size={13} /> Deploy VPS
@@ -423,13 +860,11 @@ const VpsPage = ({ onScan }: { onScan: (h: string) => void }) => (
                 <td className="px-4 py-3"><ProviderBadge p={v.provider} /></td>
                 <td className="px-4 py-3"><StatusBadge status={v.status} /></td>
                 <td className="px-4 py-3">
-                  <span className={`font-700 ${v.vulns === 0 ? "text-zinc-500" : v.vulns >= 4 ? "text-red-400" : "text-yellow-400"}`}>
-                    {v.vulns}
-                  </span>
+                  <span className={`font-700 ${v.vulns === 0 ? "text-zinc-500" : v.vulns >= 4 ? "text-red-400" : "text-yellow-400"}`}>{v.vulns}</span>
                 </td>
                 <td className="px-4 py-3">
                   <button
-                    onClick={() => onScan(v.name)}
+                    onClick={() => onScan(v.ip)}
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-emerald-950 text-zinc-300 hover:text-emerald-400 border border-zinc-700 hover:border-emerald-800 transition-all text-[10px] font-700 uppercase tracking-wider"
                   >
                     <Search size={11} /> Scan
@@ -444,6 +879,7 @@ const VpsPage = ({ onScan }: { onScan: (h: string) => void }) => (
   </div>
 );
 
+// DeployPage — "Deploy Instance" button also routes through choice modal
 const DeployPage = ({ onDeploy }: { onDeploy: () => void }) => (
   <div className="space-y-5">
     <div>
@@ -451,24 +887,15 @@ const DeployPage = ({ onDeploy }: { onDeploy: () => void }) => (
       <p className="text-xs font-mono text-zinc-500 mt-0.5">Automated VPS provisioning</p>
     </div>
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* Wizard */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-zinc-800">
           <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider">Quick Deploy Wizard</span>
         </div>
         <div className="p-4 space-y-3">
-          {[
-            { label: "INSTANCE NAME", type: "input", placeholder: "e.g. web-prod-02" },
-          ].map(f => (
-            <div key={f.label}>
-              <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block mb-1.5">{f.label}</label>
-              <input
-                type="text"
-                placeholder={f.placeholder}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-700 focus:ring-1 focus:ring-emerald-900 transition-all"
-              />
-            </div>
-          ))}
+          <div>
+            <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block mb-1.5">INSTANCE NAME</label>
+            <input type="text" placeholder="e.g. web-prod-02" className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-700 focus:ring-1 focus:ring-emerald-900 transition-all" />
+          </div>
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: "PROVIDER", opts: ["AWS EC2", "DigitalOcean", "Hetzner", "Linode"] },
@@ -488,16 +915,12 @@ const DeployPage = ({ onDeploy }: { onDeploy: () => void }) => (
             <input type="checkbox" id="autoscan" defaultChecked className="accent-emerald-500 w-3.5 h-3.5" />
             <label htmlFor="autoscan" className="text-xs font-mono text-zinc-400">Run OpenVAS scan after deployment</label>
           </div>
-          <button
-            onClick={onDeploy}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-zinc-950 text-xs font-mono font-700 transition-all active:scale-[0.98] mt-1"
-          >
+          {/* Redirects to the choice modal */}
+          <button onClick={onDeploy} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-zinc-950 text-xs font-mono font-700 transition-all active:scale-[0.98] mt-1">
             <Zap size={13} /> Deploy Instance
           </button>
         </div>
       </div>
-
-      {/* Steps */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-zinc-800">
           <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider">Deployment Pipeline</span>
@@ -527,90 +950,82 @@ const DeployPage = ({ onDeploy }: { onDeploy: () => void }) => (
   </div>
 );
 
-const ScanPage = ({ onStartScan }: { onStartScan: (h: string) => void }) => (
-  <div className="space-y-5">
-    <div className="flex items-start justify-between">
-      <div>
-        <h1 className="text-xl font-mono font-800 text-zinc-100 tracking-tight">Vulnerability Scanner</h1>
-        <p className="text-xs font-mono text-zinc-500 mt-0.5">Powered by OpenVAS / GVM engine</p>
-      </div>
-      <button
-        onClick={() => onStartScan("All hosts")}
-        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-zinc-950 text-xs font-mono font-700 transition-all active:scale-95"
-      >
-        <Play size={12} /> Run New Scan
-      </button>
-    </div>
-
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-        <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider">Scan Configuration</span>
-        <div className="flex gap-2">
-          <select className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-[11px] font-mono text-zinc-300 focus:outline-none focus:border-emerald-700">
-            <option>Full &amp; Fast</option>
-            <option>Full &amp; Deep</option>
-            <option>System Discovery</option>
-          </select>
-          <select className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-[11px] font-mono text-zinc-300 focus:outline-none focus:border-emerald-700">
-            <option>All hosts</option>
-            {VPS_DATA.map(v => <option key={v.id}>{v.name}</option>)}
-          </select>
+// ScanPage — "Run New Scan" and per-host scan buttons call the real FastAPI
+const ScanPage = ({ onStartScan }: { onStartScan: (h: string) => void }) => {
+  const [customTarget, setCustomTarget] = useState("");
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-xl font-mono font-800 text-zinc-100 tracking-tight">Vulnerability Scanner</h1>
+          <p className="text-xs font-mono text-zinc-500 mt-0.5">Powered by OpenVAS / GVM engine · FastAPI backend</p>
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-3">
-        {[
-          { l: "Last Run", v: "Today 08:15" },
-          { l: "Scan Policy", v: "Full & Fast" },
-          { l: "NVT Checks", v: "73,412" },
-        ].map(s => (
-          <div key={s.l} className="bg-zinc-800 rounded-lg p-3">
-            <div className="text-[10px] font-mono text-zinc-600 uppercase tracking-wider mb-1">{s.l}</div>
-            <div className="text-sm font-mono font-600 text-zinc-200">{s.v}</div>
+
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-4">
+        <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider block">Run Scan</span>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={customTarget}
+            onChange={e => setCustomTarget(e.target.value)}
+            placeholder="IP address or hostname…"
+            className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-700 transition-all"
+          />
+          <button
+            onClick={() => onStartScan(customTarget || "All hosts")}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-zinc-950 text-xs font-mono font-700 transition-all active:scale-95"
+          >
+            <Play size={12} /> Scan
+          </button>
+        </div>
+        <p className="text-[10px] font-mono text-zinc-600">Runs port scan + CMS detection against FastAPI <code className="text-zinc-500">/scan/ports</code> and <code className="text-zinc-500">/scan/cms</code></p>
+      </div>
+
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-zinc-800">
+          <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider">Open Findings</span>
+          <div className="flex gap-2">
+            <SevBadge sev="critical" />
+            <SevBadge sev="high" />
+            <SevBadge sev="medium" />
           </div>
-        ))}
-      </div>
-    </div>
-
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-zinc-800">
-        <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider">Open Findings</span>
-        <div className="flex gap-2">
-          <SevBadge sev="critical" />
-          <SevBadge sev="high" />
-          <SevBadge sev="medium" />
         </div>
-      </div>
-      <div className="divide-y divide-zinc-800/60">
-        {VULN_DATA.map(v => (
-          <div key={v.id} className="flex items-start gap-3 px-4 py-3 hover:bg-zinc-800/30 transition-colors">
-            <div className="pt-0.5"><SevBadge sev={v.severity} /></div>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs font-mono font-600 text-zinc-200 truncate">
-                <span className="text-zinc-500 mr-1">{v.cve} —</span>{v.title}
+        <div className="divide-y divide-zinc-800/60">
+          {VULN_DATA.map(v => (
+            <div key={v.id} className="flex items-start gap-3 px-4 py-3 hover:bg-zinc-800/30 transition-colors">
+              <div className="pt-0.5"><SevBadge sev={v.severity} /></div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-mono font-600 text-zinc-200 truncate">
+                  <span className="text-zinc-500 mr-1">{v.cve} —</span>{v.title}
+                </div>
+                <div className="text-[10px] font-mono text-zinc-600 mt-0.5 flex gap-3">
+                  <span className="flex items-center gap-1"><Server size={9} />{v.host}</span>
+                  <span>CVSS {v.cvss.toFixed(1)}</span>
+                  <span className="flex items-center gap-1"><Clock size={9} />{v.age}</span>
+                </div>
               </div>
-              <div className="text-[10px] font-mono text-zinc-600 mt-0.5 flex gap-3">
-                <span className="flex items-center gap-1"><Server size={9} />{v.host}</span>
-                <span>CVSS {v.cvss.toFixed(1)}</span>
-                <span className="flex items-center gap-1"><Clock size={9} />{v.age}</span>
-              </div>
+              <button
+                onClick={() => onStartScan(v.host)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-emerald-950 text-zinc-300 hover:text-emerald-400 border border-zinc-700 hover:border-emerald-800 transition-all text-[10px] font-700 uppercase tracking-wider flex-shrink-0"
+              >
+                <Search size={11} /> Scan
+              </button>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 const ReportsPage = () => (
   <div className="space-y-5">
-    <div className="flex items-start justify-between">
-      <div>
-        <h1 className="text-xl font-mono font-800 text-zinc-100 tracking-tight">Security Reports</h1>
-        <p className="text-xs font-mono text-zinc-500 mt-0.5">Generate and export OpenVAS scan reports</p>
-      </div>
+    <div>
+      <h1 className="text-xl font-mono font-800 text-zinc-100 tracking-tight">Security Reports</h1>
+      <p className="text-xs font-mono text-zinc-500 mt-0.5">Generate and export OpenVAS scan reports</p>
     </div>
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* Generator */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-zinc-800">
           <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider">Generate Report</span>
@@ -618,11 +1033,7 @@ const ReportsPage = () => (
         <div className="p-4 space-y-3">
           <div>
             <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block mb-1.5">REPORT NAME</label>
-            <input
-              type="text"
-              placeholder="e.g. May 2025 Security Audit"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-700 focus:ring-1 focus:ring-emerald-900 transition-all"
-            />
+            <input type="text" placeholder="e.g. May 2025 Security Audit" className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-700 focus:ring-1 focus:ring-emerald-900 transition-all" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             {[
@@ -653,8 +1064,6 @@ const ReportsPage = () => (
           </button>
         </div>
       </div>
-
-      {/* History */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-zinc-800">
           <span className="text-xs font-mono font-600 text-zinc-300 uppercase tracking-wider">Recent Reports</span>
@@ -668,13 +1077,7 @@ const ReportsPage = () => (
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-mono font-600 text-zinc-200 truncate">{r.name}</div>
                 <div className="text-[10px] font-mono text-zinc-600 mt-0.5 flex gap-2 flex-wrap">
-                  <span>{r.scope}</span>
-                  <span>·</span>
-                  <span>{r.format}</span>
-                  <span>·</span>
-                  <span>{r.size}</span>
-                  <span>·</span>
-                  <span>{r.date}</span>
+                  <span>{r.scope}</span><span>·</span><span>{r.format}</span><span>·</span><span>{r.size}</span><span>·</span><span>{r.date}</span>
                 </div>
               </div>
               <button className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-zinc-700 transition-all text-[10px] font-mono flex-shrink-0">
@@ -688,14 +1091,39 @@ const ReportsPage = () => (
   </div>
 );
 
+// ─── NavItem ──────────────────────────────────────────────────────────────────
+
+function NavItem({ item, active, onClick }: { item: { id: NavPage; label: string; icon: React.FC<any>; badge?: number }; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-mono font-500 transition-all duration-150 text-left ${active ? "bg-emerald-600 text-zinc-950 font-700 shadow-lg shadow-emerald-900/40" : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"}`}
+    >
+      <item.icon size={14} className="flex-shrink-0" />
+      <span className="flex-1">{item.label}</span>
+      {item.badge !== undefined && (
+        <span className={`text-[9px] font-700 px-1.5 py-0.5 rounded-full ${active ? "bg-zinc-950/30 text-zinc-100" : "bg-red-950 text-red-400 border border-red-900"}`}>
+          {item.badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function SecureOpsDashboard() {
   const [page, setPage] = useState<NavPage>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [deployOpen, setDeployOpen] = useState(false);
+
+  // Deploy flow state machine
+  const [deployFlow, setDeployFlow] = useState<DeployFlow>(null);
+  const [deployProgressOpen, setDeployProgressOpen] = useState(false);
+  const [deployingName, setDeployingName] = useState("web-prod-02");
+
+  // Scan state (now live)
   const [scanOpen, setScanOpen] = useState(false);
-  const [scanTarget, setScanTarget] = useState("All hosts");
+  const [scanTarget, setScanTarget] = useState("");
 
   const navItems: { id: NavPage; label: string; icon: React.FC<any>; badge?: number }[] = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -705,29 +1133,21 @@ export default function SecureOpsDashboard() {
     { id: "reports", label: "Reports", icon: FileText },
   ];
 
+  const openDeployChoice = () => setDeployFlow("choice");
+
   const handleScan = (host: string) => {
     setScanTarget(host);
     setScanOpen(true);
   };
 
   return (
-    <div
-      className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col"
-      style={{ fontFamily: "'JetBrains Mono', monospace" }}
-    >
-      {/* Google Font */}
-      <link
-        rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&display=swap"
-      />
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&display=swap" />
 
       {/* Topbar */}
       <header className="h-13 border-b border-zinc-800 bg-zinc-950 flex items-center justify-between px-4 lg:px-6 z-30 sticky top-0">
         <div className="flex items-center gap-3">
-          <button
-            className="lg:hidden text-zinc-500 hover:text-zinc-200 transition-colors"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-          >
+          <button className="lg:hidden text-zinc-500 hover:text-zinc-200 transition-colors" onClick={() => setSidebarOpen(!sidebarOpen)}>
             <Menu size={20} />
           </button>
           <div className="flex items-center gap-2.5">
@@ -742,8 +1162,9 @@ export default function SecureOpsDashboard() {
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
             3 VPS Online
           </div>
+          {/* Every "Deploy VPS" button routes through the choice modal */}
           <button
-            onClick={() => setDeployOpen(true)}
+            onClick={openDeployChoice}
             className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-zinc-950 text-xs font-mono font-700 transition-all active:scale-95"
           >
             <Plus size={12} /> Deploy VPS
@@ -757,64 +1178,55 @@ export default function SecureOpsDashboard() {
       </header>
 
       <div className="flex flex-1 relative">
-        {/* Mobile overlay */}
-        {sidebarOpen && (
-          <div
-            className="fixed inset-0 bg-black/60 z-20 lg:hidden"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
-
-        {/* Sidebar */}
-        <aside className={`
-          fixed lg:static top-0 left-0 h-full lg:h-auto z-30 lg:z-auto
-          w-56 bg-zinc-900 border-r border-zinc-800 flex-shrink-0
-          transform transition-transform duration-200
-          ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
-          lg:flex lg:flex-col pt-[52px] lg:pt-0
-        `}>
+        {sidebarOpen && <div className="fixed inset-0 bg-black/60 z-20 lg:hidden" onClick={() => setSidebarOpen(false)} />}
+        <aside className={`fixed lg:static top-0 left-0 h-full lg:h-auto z-30 lg:z-auto w-56 bg-zinc-900 border-r border-zinc-800 flex-shrink-0 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"} lg:flex lg:flex-col pt-[52px] lg:pt-0`}>
           <div className="p-3 space-y-1 overflow-y-auto">
-            {/* Group labels */}
-            <div className="pt-2 pb-1">
-              <span className="text-[9px] font-mono font-700 text-zinc-600 uppercase tracking-widest px-3">Overview</span>
-            </div>
-            {navItems.slice(0, 1).map(item => (
-              <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setSidebarOpen(false); }} />
-            ))}
-            <div className="pt-3 pb-1">
-              <span className="text-[9px] font-mono font-700 text-zinc-600 uppercase tracking-widest px-3">Infrastructure</span>
-            </div>
-            {navItems.slice(1, 3).map(item => (
-              <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setSidebarOpen(false); }} />
-            ))}
-            <div className="pt-3 pb-1">
-              <span className="text-[9px] font-mono font-700 text-zinc-600 uppercase tracking-widest px-3">Security</span>
-            </div>
-            {navItems.slice(3).map(item => (
-              <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setSidebarOpen(false); }} />
-            ))}
+            <div className="pt-2 pb-1"><span className="text-[9px] font-mono font-700 text-zinc-600 uppercase tracking-widest px-3">Overview</span></div>
+            {navItems.slice(0, 1).map(item => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setSidebarOpen(false); }} />)}
+            <div className="pt-3 pb-1"><span className="text-[9px] font-mono font-700 text-zinc-600 uppercase tracking-widest px-3">Infrastructure</span></div>
+            {navItems.slice(1, 3).map(item => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setSidebarOpen(false); }} />)}
+            <div className="pt-3 pb-1"><span className="text-[9px] font-mono font-700 text-zinc-600 uppercase tracking-widest px-3">Security</span></div>
+            {navItems.slice(3).map(item => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setSidebarOpen(false); }} />)}
           </div>
         </aside>
 
-        {/* Main */}
         <main className="flex-1 overflow-y-auto p-4 lg:p-6 min-w-0">
-          {page === "dashboard" && <DashboardPage onOpenDeploy={() => setDeployOpen(true)} onOpenScan={handleScan} />}
-          {page === "vps" && <VpsPage onScan={handleScan} />}
-          {page === "deploy" && <DeployPage onDeploy={() => setDeployOpen(true)} />}
+          {page === "dashboard" && <DashboardPage onOpenDeploy={openDeployChoice} onOpenScan={handleScan} />}
+          {page === "vps" && <VpsPage onScan={handleScan} onOpenDeploy={openDeployChoice} />}
+          {page === "deploy" && <DeployPage onDeploy={openDeployChoice} />}
           {page === "scan" && <ScanPage onStartScan={handleScan} />}
           {page === "reports" && <ReportsPage />}
         </main>
       </div>
 
-      {/* Deploy Modal */}
+      {/* ── Modal Layer ── */}
+
+      {/* Step 1: Choice modal */}
+      <DeployChoiceModal
+        open={deployFlow === "choice"}
+        onClose={() => setDeployFlow(null)}
+        onChooseApiKey={() => setDeployFlow("api-key")}
+        onChooseWizard={() => { setDeployFlow(null); setPage("deploy"); }}
+      />
+
+      {/* Step 2a: API Key Deploy modal */}
+      <ApiKeyDeployModal
+        open={deployFlow === "api-key"}
+        onClose={() => setDeployFlow(null)}
+        onBack={() => setDeployFlow("choice")}
+        onStartDeploy={(name) => { setDeployingName(name); setDeployFlow(null); setDeployProgressOpen(true); }}
+      />
+
+      {/* Step 3: Deploy progress (runs after API key submit) */}
       <ProgressModal
-        open={deployOpen}
-        onClose={() => setDeployOpen(false)}
-        title="Deploying web-prod-02"
+        open={deployProgressOpen}
+        onClose={() => setDeployProgressOpen(false)}
+        title={`Deploying ${deployingName}`}
         accentColor="emerald"
         steps={[
-          "Initializing provisioner...",
-          "Creating EC2 instance...",
+          "Validating API credentials...",
+          "Creating cloud instance...",
+          "Waiting for IP assignment...",
           "Configuring VPC & firewall...",
           "Injecting SSH keys...",
           "Running Ansible hardening...",
@@ -823,66 +1235,12 @@ export default function SecureOpsDashboard() {
         ]}
       />
 
-      {/* Scan Modal */}
-      <ProgressModal
+      {/* Live Scan modal — calls FastAPI */}
+      <LiveScanModal
         open={scanOpen}
         onClose={() => setScanOpen(false)}
-        title={`OpenVAS scan — ${scanTarget}`}
-        accentColor="blue"
-        steps={[
-          "Discovering open ports...",
-          "Running service detection...",
-          "Loading NVT plugins...",
-          "Scanning for known CVEs...",
-          "Checking SSL/TLS config...",
-          "Analyzing results...",
-          "Generating report...",
-        ]}
-        logLines={[
-          "[08:15:02] Starting NVT collection...",
-          "[08:15:04] Checking 73,412 NVTs against target...",
-          "[08:15:08] Port 22 (SSH) open",
-          "[08:15:09] Port 80 (HTTP) open",
-          "[08:15:10] Port 443 (HTTPS) open",
-          "[08:15:14] Checking CVE-2024-6387...",
-          "[08:15:18] OpenSSL version check...",
-          "[08:15:22] NVT scan complete — compiling results",
-        ]}
+        target={scanTarget}
       />
     </div>
-  );
-}
-
-// ─── NavItem sub-component ────────────────────────────────────────────────────
-
-function NavItem({
-  item,
-  active,
-  onClick,
-}: {
-  item: { id: NavPage; label: string; icon: React.FC<any>; badge?: number };
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`
-        w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-mono font-500
-        transition-all duration-150 text-left
-        ${active
-          ? "bg-emerald-600 text-zinc-950 font-700 shadow-lg shadow-emerald-900/40"
-          : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-        }
-      `}
-    >
-      <item.icon size={14} className="flex-shrink-0" />
-      <span className="flex-1">{item.label}</span>
-      {item.badge !== undefined && (
-        <span className={`text-[9px] font-700 px-1.5 py-0.5 rounded-full ${active ? "bg-zinc-950/30 text-zinc-100" : "bg-red-950 text-red-400 border border-red-900"}`}>
-          {item.badge}
-        </span>
-      )}
-    </button>
   );
 }
