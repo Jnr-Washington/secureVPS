@@ -10,9 +10,12 @@ import {
 } from "@/components/ui/navigation-menu";
 import { Button } from "@/components/ui/button";
 import { Menu, X, ShieldCheck } from "lucide-react"; // Install lucide-react if not present
+import { useNavigate } from "react-router-dom";
 
 export function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
+  const navigate = useNavigate();
+  const handleLoginClick = () => {navigate("/login")};
 
   return (
     <nav className="bg-emerald-950 border-b border-emerald-900 sticky top-0 z-50">
@@ -67,7 +70,7 @@ export function Navbar() {
 
           {/* Action Buttons (Desktop) */}
           <div className="hidden md:flex items-center space-x-4">
-            <Button variant="ghost" className="text-white hover:bg-emerald-900">
+            <Button variant="ghost" className="text-white hover:bg-emerald-900" onClick={handleLoginClick}>
               Login
             </Button>
             <Button className="bg-emerald-500 hover:bg-emerald-400 text-white">

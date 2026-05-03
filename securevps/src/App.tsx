@@ -15,10 +15,11 @@ function App() {
     <Router>
   
             <Routes>
+              <Route path='/' element={<HomePage/>}/>
               <Route path='/dashboard' element={<Page />}/>
-              <Route path='/home' element={<HomePage/>}/>
               <Route path='/login' element={<Login />}/>
               <Route path='/user-dashboard' element={<SecureOpsDashboard />} />
+              <Route path='*' element={<HomePage/>}/>
             </Routes>
     </Router>
     

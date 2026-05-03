@@ -11,7 +11,7 @@ import {
   CarouselPrevious,
 } from "@/components/ui/carousel";
 import { Footer } from "@/components/layout/footer";
-
+import { useNavigate } from "react-router-dom";
 
 // Re-populated constants with descriptive content
 const PLATFORM_OVERVIEW = [
@@ -115,6 +115,8 @@ function PlatformOverviewSection(){
 };
 
 function Home(){
+  const navigate = useNavigate();
+  const handleTrialClick = () => navigate("/user-dashboard");
     return(
         <>
             <Navbar/>
@@ -130,8 +132,8 @@ function Home(){
                             The web-based SaaS for Automated VPS Deployment, Vulnerability Scanning, and AI-Powered Security Reporting.
                         </p>
                         <div className="mt-12 flex gap-6">
-                            <Button size="lg" className="bg-emerald-800 text-white hover:bg-emerald-900">
-                                Start 14-Day Free Trial
+                            <Button size="lg" className="bg-emerald-800 text-white hover:bg-emerald-900" onClick={handleTrialClick}>
+                                Start Free Trial
                             </Button>
                             <Button size="lg" variant="outline" className="border-emerald text-gray-600 hover:bg-emerald-500">
                                 Schedule a Demo

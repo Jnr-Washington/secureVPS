@@ -12,5 +12,12 @@ export default defineConfig({
   },
   define: {
     'process.env': {}
+  },
+  server: {
+    proxy: {
+      '/scan': 'http://localhost:8000',
+      '/deploy': 'http://localhost:8000',
+      '/vps': 'http://localhost:8000',
+    }
   }
 })

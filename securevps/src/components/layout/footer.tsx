@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Link } from "react-router-dom";
 import { 
   ShieldCheck, 
   Globe,  
@@ -23,17 +23,17 @@ export function Footer() {
             </p>
             <div className="flex gap-4 pt-2">
   {/* Replace Github with Globe for Web/Public Presence */}
-            <Link href="#" className="hover:text-white transition-colors" aria-label="Website">
+            <Link to="#" className="hover:text-white transition-colors" aria-label="Website">
                 <Globe className="w-5 h-5 text-emerald-500" />
             </Link>
 
             {/* Replace Linkedin with MessageSquare for Discord/Chat */}
-            <Link href="#" className="hover:text-white transition-colors" aria-label="Support Chat">
+            <Link to="#" className="hover:text-white transition-colors" aria-label="Support Chat">
                 <MessageSquare className="w-5 h-5 text-blue-400" />
             </Link>
 
             {/* Added Cpu icon for System/Hardware Status */}
-            <Link href="#" className="hover:text-white transition-colors" aria-label="System Status">
+            <Link to="#" className="hover:text-white transition-colors" aria-label="System Status">
                 <Cpu className="w-5 h-5 text-amber-400" />
             </Link>
 </div>
@@ -43,10 +43,10 @@ export function Footer() {
           <div>
             <h4 className="text-white font-bold mb-6">Product</h4>
             <ul className="space-y-4 text-sm">
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">Vulnerability Scanner</Link></li>
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">VPS Hardening</Link></li>
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">ML Intelligence</Link></li>
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">Pricing</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">Vulnerability Scanner</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">VPS Hardening</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">ML Intelligence</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">Pricing</Link></li>
             </ul>
           </div>
 
@@ -54,10 +54,10 @@ export function Footer() {
           <div>
             <h4 className="text-white font-bold mb-6">Resources</h4>
             <ul className="space-y-4 text-sm">
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">Documentation</Link></li>
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">API Reference</Link></li>
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">Security Blog</Link></li>
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">Community</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">Documentation</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">API Reference</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">Security Blog</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">Community</Link></li>
             </ul>
           </div>
 
@@ -65,10 +65,10 @@ export function Footer() {
           <div>
             <h4 className="text-white font-bold mb-6">Enterprise</h4>
             <ul className="space-y-4 text-sm">
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">SLA</Link></li>
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">Privacy Policy</Link></li>
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">Terms of Service</Link></li>
-              <li><Link href="#" className="hover:text-emerald-400 transition-colors">Compliance</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">SLA</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">Privacy Policy</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">Terms of Service</Link></li>
+              <li><Link to="#" className="hover:text-emerald-400 transition-colors">Compliance</Link></li>
             </ul>
           </div>
         </div>

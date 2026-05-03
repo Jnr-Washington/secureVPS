@@ -34,10 +34,7 @@ import {
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 // FastAPI backend (Python) – adjust if you run on a different port
-const FASTAPI_BASE = "http://localhost:8000";
-
-// Express backend (Node) – bridges to deployment.py
-const EXPRESS_BASE = "http://localhost:3001";
+const FASTAPI_BASE = "";
 
 // ─── API Layer ────────────────────────────────────────────────────────────────
 
@@ -87,7 +84,7 @@ async function apiScanCms(target: string): Promise<ScanResult> {
 
 // Express bridge: POST /deploy → calls deployment.py VPSDeploymentPipeline
 async function apiDeploy(payload: DeployPayload): Promise<DeployResult> {
-  const res = await fetch(`${EXPRESS_BASE}/deploy`, {
+  const res = await fetch(`${FASTAPI_BASE}/deploy`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -564,42 +561,56 @@ interface LiveScanModalProps {
   open: boolean;
   onClose: () => void;
   target: string;
+  onGenerateReport: (target: string) => void;
 }
 
-const LiveScanModal = ({ open, onClose, target }: LiveScanModalProps) => {
+const LiveScanModal = ({ open, onClose, target, onGenerateReport }: LiveScanModalProps) => {
   type Phase = "idle" | "ports" | "cms" | "done" | "error";
   const [phase, setPhase] = useState<Phase>("idle");
   const [portsResult, setPortsResult] = useState<ScanResult | null>(null);
   const [cmsResult, setCmsResult] = useState<ScanResult | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [log, setLog] = useState<string[]>([]);
+  const [showActionCard, setShowActionCard] = useState(false);
 
   const addLog = (line: string) => setLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${line}`]);
 
   useEffect(() => {
     if (!open) {
       setPhase("idle"); setPortsResult(null); setCmsResult(null);
-      setLog([]); setErrorMsg("");
+      setLog([]); setErrorMsg(""); setShowActionCard(false);
       return;
     }
     runScan();
   }, [open, target]);
 
   const runScan = async () => {
+    setShowActionCard(false);
     setPhase("ports");
     addLog(`Starting port scan on ${target}...`);
     try {
       const ports = await apiScanPorts(target);
-      setPortsResult(ports);
-      addLog(`Port scan complete. Found ${ports.open_ports?.length ?? 0} open port(s).`);
-      (ports.open_ports ?? []).forEach(p => addLog(`  → Port ${p} open`));
+      // Normalize: ensure each entry is a number, filter any non-coercible values
+      const rawPorts = Array.isArray(ports.open_ports) ? ports.open_ports : [];
+      const openPorts = rawPorts
+        .map((p: unknown) => Number(p))
+        .filter((p) => !isNaN(p));
+      setPortsResult({ ...ports, open_ports: openPorts });
+      addLog(`Port scan complete. Found ${openPorts.length} open port(s).`);
+      openPorts.forEach(p => addLog(`  → Port ${p} open`));
 
       setPhase("cms");
       addLog(`Detecting CMS on ${target}...`);
-      const cms = await apiScanCms(target);
+      const cmsRaw = await apiScanCms(target);
+      // Normalize cms field to string | null regardless of backend shape
+      const cmsValue = cmsRaw.cms != null
+        ? (typeof cmsRaw.cms === "string" ? cmsRaw.cms : JSON.stringify(cmsRaw.cms))
+        : null;
+      const cms: ScanResult = { ...cmsRaw, cms: cmsValue };
       setCmsResult(cms);
-      addLog(`CMS detection complete: ${cms.cms ?? "None detected"}`);
+      addLog(`CMS detection complete: ${cmsValue ?? "None detected"}`);
       setPhase("done");
+      setShowActionCard(true);
     } catch (e: any) {
       setErrorMsg(e.message || "Scan failed");
       addLog(`ERROR: ${e.message}`);
@@ -618,10 +629,12 @@ const LiveScanModal = ({ open, onClose, target }: LiveScanModalProps) => {
   };
 
   const pct = phase === "idle" ? 0 : phase === "ports" ? 30 : phase === "cms" ? 70 : 100;
+  const portCount = portsResult?.open_ports?.length ?? 0;
+  const cmsDetected = cmsResult?.cms ?? null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-lg mx-4 overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-lg mx-4 overflow-hidden shadow-2xl relative" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
           <span className="font-mono font-700 text-zinc-100 text-sm">Live Scan — {target}</span>
           <button onClick={onClose} className="text-zinc-500 hover:text-zinc-200 transition-colors"><X size={16} /></button>
@@ -651,8 +664,8 @@ const LiveScanModal = ({ open, onClose, target }: LiveScanModalProps) => {
             ))}
           </div>
 
-          {/* Results */}
-          {phase === "done" && (
+          {/* Inline results — shown after dismissing the action card */}
+          {phase === "done" && !showActionCard && (
             <div className="space-y-3">
               {portsResult && (
                 <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
@@ -691,9 +704,53 @@ const LiveScanModal = ({ open, onClose, target }: LiveScanModalProps) => {
             </button>
           )}
           <button onClick={onClose} className="ml-auto px-4 py-1.5 rounded-lg text-xs font-mono bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border border-zinc-700 transition-all">
-            {phase === "done" || phase === "error" ? "Close" : "Cancel"}
+            {phase === "done" || phase === "error" ? "Discard & Close" : "Cancel"}
           </button>
         </div>
+
+        {/* ── Action card pop-over — slides up on scan completion ── */}
+        {showActionCard && (
+          <div className="absolute inset-0 flex items-end z-10">
+            <div className="w-full bg-zinc-900/95 backdrop-blur-sm border-t-2 border-emerald-600 shadow-2xl px-5 py-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 size={15} className="text-emerald-400" />
+                  <span className="text-sm font-mono font-700 text-zinc-100">Scan Complete — What's next?</span>
+                </div>
+                <button onClick={() => setShowActionCard(false)} className="text-zinc-600 hover:text-zinc-300 transition-colors">
+                  <X size={14} />
+                </button>
+              </div>
+
+              {/* Summary pills */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="flex items-center gap-1.5 text-[11px] font-mono px-2.5 py-1 rounded-full bg-blue-950 text-blue-400 border border-blue-800">
+                  <Network size={10} /> {portCount} open port{portCount !== 1 ? "s" : ""}
+                </span>
+                <span className="flex items-center gap-1.5 text-[11px] font-mono px-2.5 py-1 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700">
+                  <Globe size={10} /> CMS: {cmsDetected ?? "none detected"}
+                </span>
+                <span className="text-[10px] font-mono text-zinc-600 ml-1">{target}</span>
+              </div>
+
+              {/* Action buttons */}
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => { onGenerateReport(target); onClose(); }}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-zinc-950 text-xs font-mono font-700 transition-all active:scale-[0.98]"
+                >
+                  <FileText size={13} /> Generate Report
+                </button>
+                <button
+                  onClick={() => setShowActionCard(false)}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-mono font-700 border border-zinc-700 transition-all active:scale-[0.98]"
+                >
+                  <Eye size={13} /> View Findings
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1019,7 +1076,9 @@ const ScanPage = ({ onStartScan }: { onStartScan: (h: string) => void }) => {
   );
 };
 
-const ReportsPage = () => (
+const ReportsPage = ({ initialReportName = "" }: { initialReportName?: string }) => {
+  const [reportName, setReportName] = useState(initialReportName);
+  return (
   <div className="space-y-5">
     <div>
       <h1 className="text-xl font-mono font-800 text-zinc-100 tracking-tight">Security Reports</h1>
@@ -1033,7 +1092,13 @@ const ReportsPage = () => (
         <div className="p-4 space-y-3">
           <div>
             <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block mb-1.5">REPORT NAME</label>
-            <input type="text" placeholder="e.g. May 2025 Security Audit" className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-700 focus:ring-1 focus:ring-emerald-900 transition-all" />
+            <input
+              type="text"
+              value={reportName}
+              onChange={e => setReportName(e.target.value)}
+              placeholder="e.g. May 2025 Security Audit"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-700 focus:ring-1 focus:ring-emerald-900 transition-all"
+            />
           </div>
           <div className="grid grid-cols-2 gap-3">
             {[
@@ -1089,7 +1154,8 @@ const ReportsPage = () => (
       </div>
     </div>
   </div>
-);
+  );
+};
 
 // ─── NavItem ──────────────────────────────────────────────────────────────────
 
@@ -1125,6 +1191,15 @@ export default function SecureOpsDashboard() {
   const [scanOpen, setScanOpen] = useState(false);
   const [scanTarget, setScanTarget] = useState("");
 
+  // Report pre-population from scan results
+  const [reportInitName, setReportInitName] = useState("");
+
+  const handleGenerateReport = (target: string) => {
+    setReportInitName(target);
+    setScanOpen(false);
+    setPage("reports");
+  };
+
   const navItems: { id: NavPage; label: string; icon: React.FC<any>; badge?: number }[] = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "vps", label: "VPS Fleet", icon: Server },
@@ -1154,7 +1229,7 @@ export default function SecureOpsDashboard() {
             <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center">
               <Shield size={14} className="text-zinc-950" />
             </div>
-            <span className="text-sm font-mono font-800 text-zinc-100 tracking-tight">SecureOps</span>
+            <span className="text-sm font-mono font-800 text-zinc-100 tracking-tight">SecureVPS</span>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -1195,7 +1270,7 @@ export default function SecureOpsDashboard() {
           {page === "vps" && <VpsPage onScan={handleScan} onOpenDeploy={openDeployChoice} />}
           {page === "deploy" && <DeployPage onDeploy={openDeployChoice} />}
           {page === "scan" && <ScanPage onStartScan={handleScan} />}
-          {page === "reports" && <ReportsPage />}
+          {page === "reports" && <ReportsPage initialReportName={reportInitName} />}
         </main>
       </div>
 
@@ -1240,6 +1315,7 @@ export default function SecureOpsDashboard() {
         open={scanOpen}
         onClose={() => setScanOpen(false)}
         target={scanTarget}
+        onGenerateReport={handleGenerateReport}
       />
     </div>
   );
