@@ -1,3 +1,4 @@
+import { ScannerForm } from "@/features/scanner/ScannerForm"
 import { Navbar } from "@/components/layout/navbar";
 import { Button } from "@/components/ui/button";
 import { Server, Database, AlertTriangle, ShieldCheck } from "lucide-react";
@@ -150,6 +151,7 @@ function Home(){
                 </section>
 
                 <PlatformOverviewSection />
+                <ScannerForm />
             </main>
             
         </>
