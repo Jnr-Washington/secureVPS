@@ -15,7 +15,8 @@ import { useNavigate } from "react-router-dom";
 export function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const navigate = useNavigate();
-  const handleLoginClick = () => {navigate("/login")};
+  const handleLoginClick = () => { navigate("/login"); };
+  const handleSignupClick = () => { navigate("/signup"); };
 
   return (
     <nav className="bg-emerald-950 border-b border-emerald-900 sticky top-0 z-50">
@@ -73,7 +74,7 @@ export function Navbar() {
             <Button variant="ghost" className="text-white hover:bg-emerald-900" onClick={handleLoginClick}>
               Login
             </Button>
-            <Button className="bg-emerald-500 hover:bg-emerald-400 text-white">
+            <Button className="bg-emerald-500 hover:bg-emerald-400 text-white" onClick={handleSignupClick}>
               Free Signup
             </Button>
           </div>
@@ -98,8 +99,8 @@ export function Navbar() {
             <a href="#" className="text-emerald-100 hover:text-white px-3 py-2 text-base font-medium">Solutions</a>
             <a href="#" className="text-emerald-100 hover:text-white px-3 py-2 text-base font-medium">Pricing</a>
             <div className="pt-4 flex flex-col gap-3">
-              <Button variant="outline" className="w-full text-emerald-950 border-emerald-500">Login</Button>
-              <Button className="w-full bg-emerald-500">Free Signup</Button>
+              <Button variant="outline" className="w-full text-emerald-950 border-emerald-500" onClick={handleLoginClick}>Login</Button>
+              <Button className="w-full bg-emerald-500" onClick={handleSignupClick}>Free Signup</Button>
             </div>
           </div>
         </div>

@@ -15,6 +15,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      '/auth': 'http://localhost:8000',
       '/scan': 'http://localhost:8000',
       '/deploy': 'http://localhost:8000',
       '/vps': 'http://localhost:8000',
