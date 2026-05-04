@@ -1,42 +1,73 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Footer } from "@/components/layout/footer";
 
-export function Signup(){
-    return(
-        <div>
-            <div>
-                <h1 className="text-2xl font-bold mb-4">Create an Account</h1>
-                <p className="mb-6 text-gray-600">Sign up to get started with our services.</p>
-                <div className="max-w-md mx-auto bg-white p-8 rounded-lg shadow">
-                    <FieldGroup>
-                        <FieldLabel htmlFor="name">Name</FieldLabel>
-                        <Input id="name" placeholder="John Doe" />
-                    </FieldGroup>
-                    <FieldGroup>
-                        <FieldLabel htmlFor="email">Email</FieldLabel>
-                        <Input id="email" type="email" placeholder="john@example.com" />
-                    </FieldGroup>
-                    <FieldGroup>
-                        <FieldLabel htmlFor="password">Password</FieldLabel>
-                        <Input id="password" type="password" placeholder="••••••••" />
-                    </FieldGroup>
-                    <FieldGroup>
-                        <FieldLabel htmlFor="password">Confirm Password</FieldLabel>
-                        <Input id="password" type="password" placeholder="••••••••" />
-                    </FieldGroup>
-                    <Button className="w-full mt-6">Sign Up</Button>
+export function Signup() {
+  return (
+    <>
+      <div className="min-h-screen w-full flex items-center justify-center bg-gray-100 px-4 py-12 sm:px-6 lg:px-8">
+        <Card className="w-full max-w-sm sm:max-w-md shadow-lg">
+          <CardHeader>
+            <CardTitle>Create an account</CardTitle>
+            <CardDescription>
+              Sign up to get started with our services.
+            </CardDescription>
+            <CardAction>
+              <Button variant="link">Log In</Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            <form>
+              <div className="flex flex-col gap-5">
+                <div className="grid gap-2">
+                  <Label htmlFor="name">Full Name</Label>
+                  <Input id="name" placeholder="John Doe" required />
                 </div>
-            </div>
-        </div>
-    );
-};
-export function SignupPage(){
-    return(
-        <>
-            <Signup />
-            <Footer />
-        </>
-    );
-};
+                <div className="grid gap-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input id="email" type="email" placeholder="john@example.com" required />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="password">Password</Label>
+                  <Input id="password" type="password" placeholder="••••••••" required />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="confirm-password">Confirm Password</Label>
+                  <Input id="confirm-password" type="password" placeholder="••••••••" required />
+                </div>
+              </div>
+            </form>
+          </CardContent>
+          <CardFooter className="flex-col gap-2">
+            <Button type="submit" className="w-full">
+              Sign Up
+            </Button>
+            <Button variant="outline" className="w-full">
+              Sign Up with Google
+            </Button>
+          </CardFooter>
+        </Card>
+      </div>
+      <Footer />
+    </>
+  );
+}
+
+export function SignupPage() {
+  return (
+    <>
+    <Signup />
+    <Footer />
+    </>
+  );
+}
